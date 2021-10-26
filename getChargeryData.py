@@ -34,11 +34,12 @@ import binascii
 from argparse import ArgumentParser
 
 modeList= ["Discharge", "Charge", "Storage"]
-gotCellData = False
-gotSysData  = False 
-debug=False
+gotCellData = False;
+gotSysData  = False;
+gotCellImpedance = False;
+debug=False;
 cellCount = 8
-protocolVersion = 126 # 122, 124, 125 
+protocolVersion = ["V126"] # 122, 124, 125 
     
 
 def bin2hex(str1):
@@ -101,7 +102,7 @@ def getCellData(fileObj, hexLine, strLen):
         else:
                 if (debug): print("hexLine len", len(hexLine))
 
-        for cell in range(dataStart, dataStart + cellCount * 2, 4):    # Change 32 to 96 to support the BMS16
+        for cell in range(dataStart, dataStart + cellCount * 4, 4):    # 2 charaters for one byte, every cell value: 2 byte.
                 cellVolts = get_voltage_value(int(hexLine[cell:cell+2], 16), int(hexLine[cell+2:cell+4], 16))
                 if (debug): print("Cell ", cellNum, ":", cellVolts, "v")
                 # format the data for node_exporter to read into prometheus
@@ -114,16 +115,16 @@ def getCellData(fileObj, hexLine, strLen):
                 aggVolts += cellVolts
                 cellNum += 1
 				
-        if (protocolVersion == '122'):
+        if (protocolVersion == 'V122'):
                 soc = int(hexLine[cell], 16)
                 
-        # elif (protocalVersion == '125'):
+        # elif (protocalVersion == 'V125'):
         
-        elif (protocolVersion == '126'):
+        elif (protocolVersion == 'V126'):
                 # 4 Bytes = 1 byte: 4 chars
-                capacity_wh = get_capacity_value(int(hexLine[cell:cell+8],16))
+                capacity_wh = get_capacity_value(int(hexLine[cell:cell+2],16),int(hexLine[cell+2:cell+4],16),int(hexLine[cell+4:cell+6],16),int(hexLine[cell+6:cell+8],16))
                 # 4 Bytes = 1 Byte: 2 chars
-                capacity_ah = get_capacity_value(int(hexLine[cell+8:cell+16],16))		
+                capacity_ah = get_capacity_value(int(hexLine[cell+8:cell+10],16),int(hexLine[cell+10:cell+12],16),int(hexLine[cell+12:cell+14],16),int(hexLine[cell+14:cell+16],16))		
         else:
                 soc = int(hexLine[cell], 16)
 
@@ -255,7 +256,8 @@ def getSysData(fileObj, hexLine, strLen):
         return(False)
 
 # Command 58
-# Report cells impedance (main control board)	
+# Report cells impedance (main control board)
+# updates only on mode change 
 def getCellImpedance(fileObj, hexLine, strLen):
         decStrLen = len(hexLine)
         dataStart = 8   # cell impedance data starts at byte 9 in 2 byte chunks (hi-lo)
@@ -303,7 +305,13 @@ def getCellImpedance(fileObj, hexLine, strLen):
 
         # soc = int(hexLine[cell], 16)
 
-                gotCellImpedance = True;
+        aggImpedance = "{:4.2f}".format(aggImpedance)
+        valName  = "mode=\"aggImpedance\""
+        valName  = "{" + valName + "}"
+        dataStr  = f"BMS_A{valName} {aggImpedance}"
+        print(dataStr, file=fileObj)
+
+        gotCellImpedance = True;
         return(False)
 
 ################ main ##################
@@ -344,7 +352,7 @@ parser.add_argument(
         "-c",
         "--cells",
         type=int,
-        help="Specifies the number of cells",
+        help="Specifies the number of cells (1-24)",
         default="8",
 )
 
@@ -363,10 +371,7 @@ if args.protocol:
         protocolVersion = args.protocol
 
 if args.cells:
-        cellCount = args.cells
-        
-        
-
+        cellCount = args.cells     
 
 # id id type len data                          checksum
 # 24 24 57   0F  10 68 02 00 00 FF 21 FF 21 00 68
@@ -376,8 +381,12 @@ if args.cells:
 # data is written to the serial port every second or less, waiting too long results in garbled lines.
 # Read fast and often to get the best results. System and Cell data is written at different frequencies.
 
-ser = serial.Serial(devName, 115200, bytesize=8, parity='N', stopbits=1, timeout=0.1)
-if (debug): print("Opened:", ser.name)
+try:
+        ser = serial.Serial(devName, 115200, bytesize=8, parity='N', stopbits=1, timeout=0.1)
+        if (debug): print("Opened:", ser.name)
+except OSError as err:
+        print("Failed to open port: ", devName)
+        exit()
 
 while (ser.is_open):
         #myBin = ser.read()     # read 1 byte
@@ -389,13 +398,13 @@ while (ser.is_open):
         hexLine = hexLine.decode('utf-8')       # remove leading b in Python3
         dataLen = len(hexLine)
 
-        if (gotSysData or gotCellData):
+        if (gotSysData or gotCellData or gotCellImpedance):
                 if (debug): print("Skip new tmp file")
         else:
                 if (debug): print("Opened new tmp file /ramdisk/BMS_A.prom.tmp")
                 file_object = open('/ramdisk/BMS_A.prom.tmp', mode='w')
 
-        if (debug): print("Read ", len(hexLine), "bytes: ", hexLine, "gotSysData:", gotSysData, "gotCellData:", gotCellData)
+        if (debug): print("Read ", len(hexLine), "bytes: ", hexLine, "gotSysData:", gotSysData, "gotCellData:", gotCellData, "gotCellImpedance", gotCellImpedance)
 
         if (dataLen > 14):
                 byteA = hexLine[0:2]    # header
@@ -418,6 +427,7 @@ while (ser.is_open):
                                 if (debug): print("Opened new tmp file /ramdisk/BMS_A.prom.tmp")
                                 gotSysData  = False;    # start all over again
                                 gotCellData = False;
+                                gotCellImpedance = False; # not really right, find another solution later...
 
                         if (byteC == "56"):
                                 if (debug): print("Found Cell block", byteA, byteB, byteC, hexLine)
