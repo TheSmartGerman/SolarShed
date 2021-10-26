@@ -7,22 +7,39 @@
 # v0.4b 5-16-20 Joe Elliott joe@inetd.com
 # Protocol at http://chargery.com/uploadFiles/bms24_additional_protocol%20V1.22.pdf
 
+# updated by TheSmartGerman
+# protocal v1.26
+# Protocol at https://www.chargery.com/uploadFiles/BMS24T,16T,8T%20Additional%20Protocol%20Info%20V1.26.pdf
+# Main unit update to V4.05, the version must fit with protocol V1.26 
+
+# Protocol Versions (according to the protocol documentation)
+# V1.22 Add SOC send out
+# V1.24 Add Wh user setup and also Wh & Ah send out
+# V1.25 Add cell impedance measurement and also mΩ /current that measure impedance send out
+# V1.26 Add Discharge End voltage of cell, and charge, discharge status send out
+
+# 1. This communication protocol is used for BMS8T, BMS16T and BMS24T
+# 2. The BMS only send out data, it DOESN’T receive any data
+# 3. When using an external device to read the BMS, please correct communication protocol after main unit is updated
+# 4. The GND of RS232 port of BMS cannot connect to cell 1- or battery negative which is in monitoring.
+
+
+# Data length: From The packet header to check sum(include check sum)
+
+
 import serial
 import sys, os, io
 import time
 import binascii
-
-devName='/dev/ttyUSB0'
+from argparse import ArgumentParser
 
 modeList= ["Discharge", "Charge", "Storage"]
-gotCellData = False;
-gotSysData  = False; 
+gotCellData = False
+gotSysData  = False 
 debug=False
-
-if (len(sys.argv) > 1):
-        if (sys.argv[1] == "-d"):
-                debug=True
-                print("sys.argv[0]: Debug: enabled")
+cellCount = 8
+protocolVersion = 126 # 122, 124, 125 
+    
 
 def bin2hex(str1):
         bytes_str = bytes(str1)
@@ -34,9 +51,32 @@ def get_voltage_value(byte1, byte2):
 def get_current_value(byte1, byte2):
         return float((float(byte1 * 256) + float(byte2)) / 10)
 
+# It is instant current when measure cell impedance	
+def get_current1_value(byte1, byte2):
+		return float((float(byte1) + float(byte2 * 256)) / 10)  
+
 def get_temp_value(byte1, byte2):
         return float((float(byte1 * 256) + float(byte2)) / 10)
 
+def get_impedance_value(byte1, byte2):
+		return float((float(byte1) + float(byte2  * 256 )) / 10)
+
+# wh and ah are the same formula		
+def get_capacity_value(byte1, byte2, byte3, byte4):
+		return float((float(byte1) + float(byte2 * 256) + (byte3 * 256 * 256) + (byte4 * 256 * 256 * 256))/1000)
+
+# Checksum calculation: Sum all packet bytes and calc the sum mod 256
+def getCheckSum(hexLine):
+		for sum in len(hexLine):
+		        chk_sum =+ hexLine[sum * 2:sum * 2 + 2] # 0*0 = 0: 0*0 + 2 = 2; 1*2 = 0: 1*2+2 = 4 
+		
+		chk_sum = chk_sum % 256	
+			
+		if (debug): print("Check Sum:", chk_sum)
+		
+		return(sum)
+# Command 56
+# Report cells voltage (main control board)
 def getCellData(fileObj, hexLine, strLen):
         decStrLen = len(hexLine)
         minLen = 44     # minimal bytes for the 8s inc header (each byte is 2 chars)
@@ -61,7 +101,7 @@ def getCellData(fileObj, hexLine, strLen):
         else:
                 if (debug): print("hexLine len", len(hexLine))
 
-        for cell in range(dataStart, dataStart + 32, 4):    # Change 32 to 96 to support the BMS16
+        for cell in range(dataStart, dataStart + cellCount * 2, 4):    # Change 32 to 96 to support the BMS16
                 cellVolts = get_voltage_value(int(hexLine[cell:cell+2], 16), int(hexLine[cell+2:cell+4], 16))
                 if (debug): print("Cell ", cellNum, ":", cellVolts, "v")
                 # format the data for node_exporter to read into prometheus
@@ -73,8 +113,19 @@ def getCellData(fileObj, hexLine, strLen):
 
                 aggVolts += cellVolts
                 cellNum += 1
-
-        soc = int(hexLine[cell], 16)
+				
+        if (protocolVersion == '122'):
+                soc = int(hexLine[cell], 16)
+                
+        # elif (protocalVersion == '125'):
+        
+        elif (protocolVersion == '126'):
+                # 4 Bytes = 1 byte: 4 chars
+                capacity_wh = get_capacity_value(int(hexLine[cell:cell+8],16))
+                # 4 Bytes = 1 Byte: 2 chars
+                capacity_ah = get_capacity_value(int(hexLine[cell+8:cell+16],16))		
+        else:
+                soc = int(hexLine[cell], 16)
 
         valName  = "mode=\"SOC2\""
         valName = "{" + valName + "}"
@@ -95,6 +146,9 @@ def getCellData(fileObj, hexLine, strLen):
         gotCellData = True;
         return(False)
 
+# Command 57
+# Report measure value (main control board)
+# the data length is always 13 
 def getSysData(fileObj, hexLine, strLen):
         decStrLen = len(hexLine)
         dataStart = 8   # data starts at byte 8 in 2 byte chunks (hi-lo)        
@@ -200,7 +254,119 @@ def getSysData(fileObj, hexLine, strLen):
         gotSysData = True;
         return(False)
 
+# Command 58
+# Report cells impedance (main control board)	
+def getCellImpedance(fileObj, hexLine, strLen):
+        decStrLen = len(hexLine)
+        dataStart = 8   # cell impedance data starts at byte 9 in 2 byte chunks (hi-lo)
+        # for BMS8T, 16T, and 24T, the data length depends on cell counts, each cell impedance is 2 bytes
+        # header + command + dataLen + mode + current + 2 * count of cells + checksum 
+        minLen = 8 + 2 + 4 + cellCount * 4 + 2
+        cellNum = 1
+        aggImpedance = 0    # total impedance of the battery
+        
+        global gotCellImpedance
+
+        if (debug): print("getCellImpedance: called - ", hexLine)
+
+        if (debug):
+                header  = hexLine[0:4]          # header
+                command = hexLine[4:6]          # command
+                dataLen = hexLine[6:8]          # data length
+                currentMode1 = hexLine[8:10]	# currentMode1
+                current1 = hexLine[10:14]	# current1
+
+                print("header:", header)
+                print("command:", command)
+                print("dataLen:", int(dataLen, 16), "bytes")
+                print("currentMode1", int(dataLen, 16))
+                print("current1", )
+
+        if (decStrLen < strLen) or (decStrLen < minLen):
+                if (debug): print("Truncated cell block - len:", len(hexLine), "Expected:", strLen)
+                return(True)
+        else:
+                if (debug): print("hexLine len", len(hexLine))
+
+        for cell in range(dataStart, dataStart + cellCount * 4, 4):    # Change 32 to 96 to support the BMS16
+                cellImpedance = get_impedance_value(int(hexLine[cell:cell+4], 16), int(hexLine[cell+4:cell+8], 16))
+                if (debug): print("Cell ", cellNum, ":", cellImpedance, "v")
+                # format the data for node_exporter to read into prometheus
+                #valName  = "mode={}{}".format("CellNum", cellNum)
+                valName  = "mode=\"CellNum" + str(cellNum) + "\""
+                valName = "{" + valName + "}"
+                dataStr  = f"BMS_A{valName} {cellImpedance}"
+                print(dataStr, file=fileObj)
+
+                aggImpedance += cellImpedance
+                cellNum += 1
+
+        # soc = int(hexLine[cell], 16)
+
+                gotCellImpedance = True;
+        return(False)
+
 ################ main ##################
+
+parser = ArgumentParser(description='Get BMS Data')
+
+parser.add_argument(
+        "-p",
+        "--port",
+        type=str,
+        help="Specifies the device communications port (/dev/ttyUSB0 [default], /dev/hidraw0, COM3, ...)",
+        default="/dev/ttyUSB0",
+)
+
+parser.add_argument(
+        "-D",
+        "--debug",
+        action="store_true",
+        help="Enable Debug and above (i.e. all) messages",
+)
+
+parser.add_argument(
+        "-P",
+        "--protocol",
+        type=str,
+        help="Specifies the device command and response protocol, (default: V122)",
+        default="V122",
+        choices=[
+                "V121",
+                "V122",
+                "V124",
+                "V125",
+                "V126",
+        ],
+)
+
+parser.add_argument(
+        "-c",
+        "--cells",
+        type=int,
+        help="Specifies the number of cells",
+        default="8",
+)
+
+args = parser.parse_args()
+
+if args.debug:
+        debug = True
+        print("Debug: enabled")
+
+if args.port:
+        devName = args.port
+else:
+        devName='/dev/ttyUSB0'
+
+if args.protocol:
+        protocolVersion = args.protocol
+
+if args.cells:
+        cellCount = args.cells
+        
+        
+
 
 # id id type len data                          checksum
 # 24 24 57   0F  10 68 02 00 00 FF 21 FF 21 00 68
@@ -234,7 +400,7 @@ while (ser.is_open):
         if (dataLen > 14):
                 byteA = hexLine[0:2]    # header
                 byteB = hexLine[2:4]    # header
-                byteC = hexLine[4:6]    # packet type 56 | 57
+                byteC = hexLine[4:6]    # packet type 56 | 57 | 58
                 byteD = hexLine[6:8]    # packet len
 
                 if (byteA == "24" and byteB == "24"):
@@ -261,6 +427,10 @@ while (ser.is_open):
                                 if (debug): print("Found System block", byteA, byteB, byteC, hexLine)
                                 if (not gotSysData):
                                         getSysData(file_object, hexLine, int(byteD, 16))
+                        elif (byteC == "58"):
+                                if (debug): print("Found Impedance block", byteA, byteB, ByteC, hexLine)
+                                if (not gotCellImpedance):
+                                        getCellImpedance(file_object, hexLine, int(byteD, 16))                
                         else:
                                 if (debug): print("Found Unexpected command block", byteA, byteB, byteC, hexLine)
                 else:
