@@ -60,7 +60,8 @@ def get_temp_value(byte1, byte2):
         return float((float(byte1 * 256) + float(byte2)) / 10)
 
 def get_impedance_value(byte1, byte2):
-	return float((float(byte1) + float(byte2  * 256 )) / 10)
+	# return float(float(byte1) + float(byte2  * 256 ) / 10) # according to datasheet
+        return float((float(byte1) + float(byte2  * 256 )) / 10) # proof by recalc
 
 # wh and ah are the same formula		
 def get_capacity_value(hexLine):
@@ -72,19 +73,47 @@ def get_capacity_value(hexLine):
 
 # Checksum calculation: Sum all packet bytes and calc the sum mod 256
 def getCheckSum(hexLine):
-        for sum in len(hexLine):
-                chk_sum =+ hexLine[sum * 2:sum * 2 + 2] # 0*0 = 0: 0*0 + 2 = 2; 1*2 = 0: 1*2+2 = 4 
-        
-        chk_sum = chk_sum % 256	
-                
-        if (debug): print("Check Sum:", chk_sum)
-        
-        return(sum)
+        chk_sum = 0
+
+        # https://stackoverflow.com/questions/29699927/bytearray-sum-in-python
+        # CHECKSUM have to be calcultate without the chechskum byte :P
+        for i in range(0,len(hexLine)-3,2):
+                chk_sum += int(hexLine[i:i+2],16)
+
+        # MOD by 256 and retun hex value without formating: get rid of '0x'       
+        return(format(chk_sum % 256, '02x')) 
+
+def getValidData(hexLine, strLen, minLen):
+        decStrLen = len(hexLine)        # length of hex String: 2 Chars = 1 Byte
+        dataLen = hexLine[6:8]          # data length         
+
+        if (decStrLen < strLen) or (decStrLen < minLen):
+                if (debug): print("Truncated cell block - len:", len(hexLine), "Expected:", strLen)
+                return(True)
+        else:
+                if (debug): print("hexLine len", len(hexLine))
+
+        # check if length is correct
+        if (int(dataLen,16) !=  (decStrLen/2)):
+                if (debug): print("Missmatch of datalength! Expected: ", int(dataLen,16), " Received: ", (decStrLen/2))
+                return(True)
+        else:
+                if (debug): print("dataLen:", int(dataLen, 16), "bytes")
+
+        # check for valid data
+        chksum = hexLine[decStrLen-2:decStrLen] # extract Checksum
+        calc_sum = getCheckSum(hexLine)
+
+        if (debug):
+                print("Checksum:", chksum, "Calc Checksum: ", calc_sum)
+
+        if (chksum != calc_sum):
+                if(debug): print("Checksume missmatch - corupt data")
+                return(True)        
 
 # Command 56
 # Report cells voltage (main control board)
 def getCellData(fileObj, hexLine, strLen):
-        decStrLen = len(hexLine)
         minLen = 44     # minimal bytes for the 8s inc header (each byte is 2 chars)
         dataStart = 8   # cell voltage data starts at byte 9 in 2 byte chunks (hi-lo)
         cellNum = 1
@@ -96,16 +125,10 @@ def getCellData(fileObj, hexLine, strLen):
         if (debug):
                 header  = hexLine[0:4]          # header
                 command = hexLine[4:6]          # command
-                dataLen = hexLine[6:8]          # data length
                 print("header:", header)
-                print("command:", command)
-                print("dataLen:", int(dataLen, 16), "bytes")
+                print("command:", command)                
 
-        if (decStrLen < strLen) or (decStrLen < minLen):
-                if (debug): print("Truncated cell block - len:", len(hexLine), "Expected:", strLen)
-                return(True)
-        else:
-                if (debug): print("hexLine len", len(hexLine))
+        if (getValidData(hexLine, strLen, minLen)): return(True)
 
         for cell in range(dataStart, dataStart + cellCount * 4, 4):    # 2 charaters for one byte, every cell value: 2 byte.
                 cellVolts = get_voltage_value(int(hexLine[cell:cell+2], 16), int(hexLine[cell+2:cell+4], 16))
@@ -139,8 +162,6 @@ def getCellData(fileObj, hexLine, strLen):
                 dataStr  = f"BMS_A{valName} {capacity_ah}"
                 print(dataStr, file=fileObj)	
 
-                
-
                 if(debug):
                         print("Battery AH:", capacity_ah)
                         print("Battery WH:", capacity_wh)
@@ -162,13 +183,8 @@ def getCellData(fileObj, hexLine, strLen):
         dataStr  = f"BMS_A{valName} {aggVolts}"
         print(dataStr, file=fileObj)
         
-
-        #final Byte Checksum
-
-
         if (debug):
-                # print("Battery SOC:", soc, "%")
-                print("Checksum:", int(hexLine[cell+1], 16))
+                #print("Checksum:", asdf , "Calc Checksum: ", getCheckSum(hexLine))
                 print("Battery voltage:", aggVolts, "v")
 
         gotCellData = True;
@@ -177,24 +193,17 @@ def getCellData(fileObj, hexLine, strLen):
 # Command 57
 # Report measure value (main control board)
 # the data length is always 13 
-def getSysData(fileObj, hexLine, strLen):
-        decStrLen = len(hexLine)
-        dataStart = 8   # data starts at byte 8 in 2 byte chunks (hi-lo)        
+def getSysData(fileObj, hexLine, strLen):    
         minLen = 30     # minimal bytes inc header (each byte is 2 chars)
         global gotSysData
 
         if (debug): print("getSysData: called - ", hexLine)
 
-        if (decStrLen < strLen) or (decStrLen < minLen):
-                if (debug): print("Truncated system block - len:", len(hexLine), "Expected:", strLen)
-                return(True)
-        else:
-                if (debug): print("hexLine len", len(hexLine))
-
-        # first 3 fields for debug only)
+                # first 3 fields for debug only)
         header     = hexLine[0:4]       # header
         command    = hexLine[4:6]       # command
-        dataLen    = hexLine[6:8]       # data length
+
+        if (getValidData(hexLine, strLen, minLen)): return(True)        
 
         ## grap first block of Data
         maxEndVolt_hi = hexLine[8:10]      # Charge End voltage of cell
@@ -219,8 +228,7 @@ def getSysData(fileObj, hexLine, strLen):
 
         ## output if debug
         if (debug):
-                print("dataLen:", int(dataLen, 16), "bytes")
-                print("End voltage of cell:",  maxVolts, "v")
+                print("End voltage of cell:",  maxEndVolts, "v")
                 print("mode:", modeInt, modeName)
                 print("Temp 1:", temp1, "c")
                 print("Temp 2:", temp2, "c")
@@ -265,19 +273,23 @@ def getSysData(fileObj, hexLine, strLen):
 
         ## grap block of Data
         if(protocolVersion=="V126"):
-                minEndVolt_hi = hexLine[26:28]  # Discharge End Voltage of cell
-                minEndVolt_lo = hexLine[28:30]  # Discharge End Voltage of cell
-                chgProtectionStatus = hexLine[30:32]    # 1: Over Charge Protection (P) / 0: Over Charge Release (R)
-                dsgProtectionStatus = hexLine[32:34]    # 1: Over Discharge Protection (P) / o: Over Discharge Release (R)
-                chksum = hexLine[34:36] # Checksum
+                minEndVolt_hi = hexLine[28:30]  # Discharge End Voltage of cell
+                minEndVolt_lo = hexLine[30:32]  # Discharge End Voltage of cell
+                chgProtectionStatus = hexLine[32:34]    # 1: Over Charge Protection (P) / 0: Over Charge Release (R)
+                dsgProtectionStatus = hexLine[34:36]    # 1: Over Discharge Protection (P) / o: Over Discharge Release (R)
+                chksum = hexLine[36:38] # Checksum
+
+                if(debug): 
+                        print ("chgStatus hex:", chgProtectionStatus)
+                        print ("dsgStatus hex:", dsgProtectionStatus)
 
                 minEndVolts = get_voltage_value(int(minEndVolt_hi, 16), int(minEndVolt_lo, 16))
                 chgProtectionInt = int(chgProtectionStatus,16)
                 dsgProtectionInt = int(dsgProtectionStatus,16)
                 chgProtectionName = chargeList[int(chgProtectionStatus,16)]
                 dsgProtectionName = chargeList[int(dsgProtectionStatus,16)]
-
-                valName  = "mode=\"minVolts\""
+             
+                valName  = "mode=\"minEndVolts\""
                 valName  = "{" + valName + "}"
                 dataStr  = f"BMS_A{valName} {minEndVolts}"
                 print(dataStr, file=fileObj)
@@ -299,13 +311,7 @@ def getSysData(fileObj, hexLine, strLen):
                         print("min end voltage of cell:",  minEndVolts, "v")
                         print("Charge Protectoin Status", chgProtectionName)
                         print("Discharge Protection Status", dsgProtectionName)
-
-        else:
-                chksum = hexLine[28:30] # Checksum
-
-        if (debug):
-                print("Checksum:", int(chksum, 16))
-
+                              
         gotSysData = True;
         return(False)
 
@@ -313,7 +319,6 @@ def getSysData(fileObj, hexLine, strLen):
 # Report cells impedance (main control board)
 # updates only on mode change 
 def getCellImpedance(fileObj, hexLine, strLen):
-        decStrLen = len(hexLine)
         dataStart = 8   # cell impedance data starts at byte 9 in 2 byte chunks (hi-lo)
         # for BMS8T, 16T, and 24T, the data length depends on cell counts, each cell impedance is 2 bytes
         # header + command + dataLen + mode + current + 2 * count of cells + checksum 
@@ -325,24 +330,19 @@ def getCellImpedance(fileObj, hexLine, strLen):
 
         if (debug): print("getCellImpedance: called - ", hexLine)
 
+        header  = hexLine[0:4]          # header
+        command = hexLine[4:6]          # command
+        
         if (debug):
-                header  = hexLine[0:4]          # header
-                command = hexLine[4:6]          # command
-                dataLen = hexLine[6:8]          # data length
-                amp1_mode = hexLine[8:10]	# currentMode1
-                amp1_hi = hexLine[10:12]	# instant current1
-                amp1_lo = hexLine[12:14]        # instant current1
-
                 print("header:", header)
                 print("command:", command)
-                print("dataLen:", int(dataLen, 16), "bytes")
 
+        # My 16T BMS should have a Datalength of 40 Bytes but it sends out 59. Something wrong here?
+        # if (getValidData(hexLine, strLen, minLen)): return(True)  
 
-        if (decStrLen < strLen) or (decStrLen < minLen):
-                if (debug): print("Truncated cell block - len:", len(hexLine), "Expected:", strLen)
-                return(True)
-        else:
-                if (debug): print("hexLine len", len(hexLine))
+        amp1_mode = hexLine[8:10]	# currentMode1
+        amp1_hi = hexLine[10:12]	# instant current1
+        amp1_lo = hexLine[12:14]        # instant current1       
 
         # get current flow while impedance measure
         Current1ModeInt = int(amp1_mode,16)
@@ -356,9 +356,9 @@ def getCellImpedance(fileObj, hexLine, strLen):
                 print("current1", Current1)
 
         for cell in range(dataStart, dataStart + cellCount * 4, 4):  
-                cellImpedance = get_impedance_value(int(hexLine[cell:cell+4], 16), int(hexLine[cell+4:cell+8], 16))
-                if (debug): print("Cell ", cellNum, ":", cellImpedance, "v")
-                valName  = "mode=\"CellNum" + str(cellNum) + "\""
+                cellImpedance = get_impedance_value(int(hexLine[cell:cell+2], 16), int(hexLine[cell+2:cell+4], 16))
+                if (debug): print("Cell ", cellNum, ":", cellImpedance, "mOhm")
+                valName  = "mode=\"CellNumImp" + str(cellNum) + "\""
                 valName = "{" + valName + "}"
                 dataStr  = f"BMS_A{valName} {cellImpedance}"
                 print(dataStr, file=fileObj)
@@ -366,10 +366,9 @@ def getCellImpedance(fileObj, hexLine, strLen):
                 aggImpedance += cellImpedance
                 cellNum += 1
 
-        chksum = hexLine[cell:cell+2] # Checksum
-
         if(debug):
-                print("Checksum: ", chksum)        
+                print("Batterypack Impedance: ", "{:4.2f}".format(aggImpedance))
+
 
         aggImpedance = "{:4.2f}".format(aggImpedance)
         valName  = "mode=\"aggImpedance\""
@@ -377,6 +376,11 @@ def getCellImpedance(fileObj, hexLine, strLen):
         dataStr  = f"BMS_A{valName} {aggImpedance}"
         print(dataStr, file=fileObj)
 
+        valName  = "mode=\"currentMode1\""
+        valName  = "{" + valName + "}"
+        dataStr  = f"BMS_A{valName} {Current1ModeInt}"
+        print(dataStr, file=fileObj)
+ 
         gotCellImpedance = True;
         return(False)
 
@@ -470,7 +474,7 @@ while (ser.is_open):
                 if (debug): print("Opened new tmp file /ramdisk/BMS_A.prom.tmp")
                 file_object = open('/ramdisk/BMS_A.prom.tmp', mode='w')
 
-        if (debug): print("Read ", len(hexLine), "bytes: ", hexLine, "gotSysData:", gotSysData, "gotCellData:", gotCellData, "gotCellImpedance", gotCellImpedance)
+        if (debug): print("Read ", len(hexLine), "bytes: ", hexLine, " gotSysData: ", gotSysData, " gotCellData: ", gotCellData, " gotCellImpedance ", gotCellImpedance)
 
         if (dataLen > 14):
                 byteA = hexLine[0:2]    # header
@@ -480,20 +484,33 @@ while (ser.is_open):
 
                 if (byteA == "24" and byteB == "24"):
 
+                        # SysData very second
+                        # CellData very 2 seconds
+                        # Impedance Data: on change between charge & discharge -> Flush with sys/cell data (every 2 seconds)
+
+                        # every 2 seconds a dataset should be completed
                         if (gotSysData and gotCellData):
                                 # We have a complete set, before we overwrite, copy the temp file to its final dest
                                 if (debug): print("BINGO!!! - complete set - copying file to /ramdisk/BMS_A.prom")
                                 file_object.flush()
                                 file_object.close()
+                                
+                                # Imp. Data only available from time to time
+                                if(debug and gotCellImpedance): 
+                                       os.system('/bin/cp /ramdisk/BMS_A.prom.tmp /ramdisk/BMS_A.imp.prom')                                        
+
                                 outLine = os.system('/bin/mv /ramdisk/BMS_A.prom.tmp /ramdisk/BMS_A.prom')
-                                if (debug): outLine = os.system('/bin/cat /ramdisk/BMS_A.prom')
+                                if (debug):    
+                                        print("\n")
+                                        outLine = os.system('/bin/cat /ramdisk/BMS_A.prom')
+                                        
                                 #if (debug): sys.exit()
                                 # open new temp file as we have data to write
                                 file_object = open('/ramdisk/BMS_A.prom.tmp', mode='w')
                                 if (debug): print("Opened new tmp file /ramdisk/BMS_A.prom.tmp")
                                 gotSysData  = False;    # start all over again
                                 gotCellData = False;
-                                gotCellImpedance = False; # not really right, find another solution later...
+                                gotCellImpedance = False;
 
                         if (byteC == "56"):
                                 if (debug): print("Found Cell block", byteA, byteB, byteC, hexLine)
@@ -504,7 +521,7 @@ while (ser.is_open):
                                 if (not gotSysData):
                                         getSysData(file_object, hexLine, int(byteD, 16))
                         elif (byteC == "58"):
-                                if (debug): print("Found Impedance block", byteA, byteB, ByteC, hexLine)
+                                if (debug): print("Found Impedance block", byteA, byteB, byteC, hexLine)
                                 if (not gotCellImpedance):
                                         getCellImpedance(file_object, hexLine, int(byteD, 16))                
                         else:
