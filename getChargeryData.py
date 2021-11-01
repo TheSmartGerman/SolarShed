@@ -308,7 +308,7 @@ def getSysData(fileObj, hexLine, strLen):
 
                 ## output if debug
                 if (debug):
-                        print("min end voltage of cell:",  minEndVolts, "v")
+                        print("min end voltage of cell:", minEndVolts, "v")
                         print("Charge Protectoin Status", chgProtectionName)
                         print("Discharge Protection Status", dsgProtectionName)
                               
@@ -349,11 +349,22 @@ def getCellImpedance(fileObj, hexLine, strLen):
         Current1ModeName = modeList[int(amp1_mode,16)]
 
         # get current while impedance measure
-        Current1 = get_current1_value(int(amp1_hi,16),int(amp1_lo,16))
+        current1 = get_current1_value(int(amp1_hi,16),int(amp1_lo,16))
 
         if(debug):
                 print("currentMode1", Current1ModeName)
-                print("current1", Current1)
+                print("current1", current1)
+
+        valName  = "mode=\"currentMode1\", myStr=\""
+        valName  = valName + Current1ModeName + "\""
+        valName  = "{" + valName + "}"
+        dataStr  = f"BMS_A{valName} {Current1ModeInt}"
+        print(dataStr, file=fileObj)
+
+        valName  = "mode=\"current1\""
+        valName  = "{" + valName + "}"
+        dataStr  = f"BMS_A{valName} {current1}"
+        print(dataStr, file=fileObj)       
 
         for cell in range(dataStart, dataStart + cellCount * 4, 4):  
                 cellImpedance = get_impedance_value(int(hexLine[cell:cell+2], 16), int(hexLine[cell+2:cell+4], 16))
@@ -369,18 +380,12 @@ def getCellImpedance(fileObj, hexLine, strLen):
         if(debug):
                 print("Batterypack Impedance: ", "{:4.2f}".format(aggImpedance))
 
-
         aggImpedance = "{:4.2f}".format(aggImpedance)
         valName  = "mode=\"aggImpedance\""
         valName  = "{" + valName + "}"
         dataStr  = f"BMS_A{valName} {aggImpedance}"
         print(dataStr, file=fileObj)
 
-        valName  = "mode=\"currentMode1\""
-        valName  = "{" + valName + "}"
-        dataStr  = f"BMS_A{valName} {Current1ModeInt}"
-        print(dataStr, file=fileObj)
- 
         gotCellImpedance = True;
         return(False)
 
