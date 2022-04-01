@@ -1,7 +1,29 @@
 # SolarShed
-Forked from Joe - Updated to Version V126 Protocal - !! Still under test !!
+Forked from Joe - Updated to Version V126 Protocal, added checksum, cell impadance, ...
 
-Command 0x58 still give some headace -> wrong datalengt
+Most impotent changes where made in getChgageryData.py. It supportes differnt protocol versions now also a cmd line interface is know available:
+
+python3 getChargeryData.py -h
+usage: getChargeryData.py [-h] [-p PORT] [-D] [-P {V121,V122,V124,V125,V126}]
+                          [-c CELLS]
+
+Get BMS Data
+
+optional arguments:
+  -h, --help            show this help message and exit
+  -p PORT, --port PORT  Specifies the device communications port (/dev/ttyUSB0
+                        [default], /dev/hidraw0, COM3, ...)
+  -D, --debug           Enable Debug and above (i.e. all) messages
+  -P {V121,V122,V124,V125,V126}, --protocol {V121,V122,V124,V125,V126}
+                        Specifies the device command and response protocol,
+                        (default: V122)
+  -c CELLS, --cells CELLS
+                        Specifies the number of cells (1-24)
+
+BMS Know Bug: Command 0x58 Cell Impedance does report wrong datalengt, this was confirmed by the vendor of the BMS. Therfore Checksum is disabled.
+
+
+Original description from JOE:
 
 Goal - Realtime data monitoring and control of solar equipment.
 (this is an active project - im updating this page regularly - Jan 2021)
