@@ -358,12 +358,12 @@ def getCellImpedance(fileObj, hexLine, strLen):
         valName  = "mode=\"currentMode1\", myStr=\""
         valName  = valName + Current1ModeName + "\""
         valName  = "{" + valName + "}"
-        dataStr  = f"BMS_A{valName} {Current1ModeInt}"
+        dataStr  = f"BMS_A_imp{valName} {Current1ModeInt}"
         print(dataStr, file=fileObj)
 
         valName  = "mode=\"current1\""
         valName  = "{" + valName + "}"
-        dataStr  = f"BMS_A{valName} {current1}"
+        dataStr  = f"BMS_A_imp{valName} {current1}"
         print(dataStr, file=fileObj)       
 
         for cell in range(dataStart, dataStart + cellCount * 4, 4):  
@@ -371,7 +371,7 @@ def getCellImpedance(fileObj, hexLine, strLen):
                 if (debug): print("Cell ", cellNum, ":", cellImpedance, "mOhm")
                 valName  = "mode=\"CellNumImp" + str(cellNum) + "\""
                 valName = "{" + valName + "}"
-                dataStr  = f"BMS_A{valName} {cellImpedance}"
+                dataStr  = f"BMS_A_imp{valName} {cellImpedance}"
                 print(dataStr, file=fileObj)
 
                 aggImpedance += cellImpedance
@@ -383,7 +383,7 @@ def getCellImpedance(fileObj, hexLine, strLen):
         aggImpedance = "{:4.2f}".format(aggImpedance)
         valName  = "mode=\"aggImpedance\""
         valName  = "{" + valName + "}"
-        dataStr  = f"BMS_A{valName} {aggImpedance}"
+        dataStr  = f"BMS_A_imp{valName} {aggImpedance}"
         print(dataStr, file=fileObj)
 
         gotCellImpedance = True;
@@ -404,8 +404,10 @@ parser.add_argument(
 parser.add_argument(
         "-D",
         "--debug",
-        action="store_true",
         help="Enable Debug and above (i.e. all) messages",
+        action="store_true",
+        #type=int,
+        #default="1",
 )
 
 parser.add_argument(
@@ -476,8 +478,10 @@ while (ser.is_open):
         if (gotSysData or gotCellData or gotCellImpedance):
                 if (debug): print("Skip new tmp file")
         else:
-                if (debug): print("Opened new tmp file /ramdisk/BMS_A.prom.tmp")
-                file_object = open('/ramdisk/BMS_A.prom.tmp', mode='w')
+                if (debug): print("Opened new tmp file /ramdisk/BMS_A_sys.prom.tmp")
+                file_object = open('/ramdisk/BMS_A_sys.prom.tmp', mode='w')
+                if (debug): print("Opened new tmp file /ramdisk/BMS_A_imp.prom.tmp")
+                file_object_imp = open('/ramdisk/BMS_A_imp.prom.tmp', mode='w')
 
         if (debug): print("Read ", len(hexLine), "bytes: ", hexLine, " gotSysData: ", gotSysData, " gotCellData: ", gotCellData, " gotCellImpedance ", gotCellImpedance)
 
@@ -496,25 +500,37 @@ while (ser.is_open):
                         # every 2 seconds a dataset should be completed
                         if (gotSysData and gotCellData):
                                 # We have a complete set, before we overwrite, copy the temp file to its final dest
-                                if (debug): print("BINGO!!! - complete set - copying file to /ramdisk/BMS_A.prom")
+                                if (debug): print("BINGO!!! - complete set - copying file to /ramdisk/BMS_A_sys.prom")
                                 file_object.flush()
-                                file_object.close()
-                                
-                                # Imp. Data only available from time to time
-                                if(debug and gotCellImpedance): 
-                                       os.system('/bin/cp /ramdisk/BMS_A.prom.tmp /ramdisk/BMS_A.imp.prom')                                        
+                                file_object.close()                                     
 
-                                outLine = os.system('/bin/mv /ramdisk/BMS_A.prom.tmp /ramdisk/BMS_A.prom')
+                                outLine = os.system('/bin/mv /ramdisk/BMS_A_sys.prom.tmp /ramdisk/BMS_A_sys.prom')
                                 if (debug):    
                                         print("\n")
-                                        outLine = os.system('/bin/cat /ramdisk/BMS_A.prom')
+                                        outLine = os.system('/bin/cat /ramdisk/BMS_A_sys.prom')
                                         
                                 #if (debug): sys.exit()
                                 # open new temp file as we have data to write
-                                file_object = open('/ramdisk/BMS_A.prom.tmp', mode='w')
-                                if (debug): print("Opened new tmp file /ramdisk/BMS_A.prom.tmp")
+                                file_object = open('/ramdisk/BMS_A_sys.prom.tmp', mode='w')
+                                if (debug): print("Opened new tmp file /ramdisk/BMS_A_sys.prom.tmp")
                                 gotSysData  = False;    # start all over again
                                 gotCellData = False;
+
+                        if(gotCellImpedance):
+                                # We have a Impedance data copy the temp file to its final dest
+                                if (debug): print("BINGO!!! - copying file to /ramdisk/BMS_A_imp.prom")
+                                file_object_imp.flush()
+                                file_object_imp.close()                                 
+
+                                # outLine = os.system('/bin/cp /ramdisk/BMS_A_imp.prom.tmp /home/pi/BMS_A_imp.txt')
+                                outLine = os.system('/bin/mv /ramdisk/BMS_A_imp.prom.tmp /ramdisk/BMS_A_imp.prom')
+                                if (debug):    
+                                        print("\n")
+                                        outLine = os.system('/bin/cat /ramdisk/BMS_A_imp.prom')
+                                
+                                # open new temp file as we have data to write
+                                file_object_imp = open('/ramdisk/BMS_A_imp.prom.tmp', mode='w')
+                                if (debug): print("Opened new tmp file /ramdisk/BMS_A_imp.prom.tmp")
                                 gotCellImpedance = False;
 
                         if (byteC == "56"):
@@ -527,8 +543,15 @@ while (ser.is_open):
                                         getSysData(file_object, hexLine, int(byteD, 16))
                         elif (byteC == "58"):
                                 if (debug): print("Found Impedance block", byteA, byteB, byteC, hexLine)
+                                # collect impedance data
+                                # if (debug == 2): 
+                                # file_object_debug = open('/home/pi/raw_imp.txt', mode='a')
+                                # print(hexLine, file=file_object_debug)
+                                # file_object_debug.flush()
+                                # file_object_debug.close() 
+                                        
                                 if (not gotCellImpedance):
-                                        getCellImpedance(file_object, hexLine, int(byteD, 16))                
+                                        getCellImpedance(file_object_imp, hexLine, int(byteD, 16))                
                         else:
                                 if (debug): print("Found Unexpected command block", byteA, byteB, byteC, hexLine)
                 else:
